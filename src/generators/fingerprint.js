@@ -1,22 +1,22 @@
 'use strict';
 
 /**
- * Fingerprint Generator — Phase 1
- * Deterministically generates a unique SVG visual fingerprint for an AI agent.
+ * Fingerprint Generator — v2  (human-like circular ridges)
  *
- * Usage:
- *   const { generateFingerprint } = require('./fingerprint');
- *   const svg = generateFingerprint('agent-001', '2024-01-15T08:30:00Z', 'openai');
+ * Generates a biometric-style circular fingerprint with:
+ *   - Concentric elliptical ridge lines (whorl / loop / arch patterns)
+ *   - Per-ridge breaks (ridge endings) for organic realism
+ *   - Platform-family hue + per-agent ±25° shift
+ *   - Core dot + delta landmark point
  */
 
-const GRID  = 21;   // cells across / down
-const CELL  = 10;   // px per cell
-const PAD   = 14;   // px padding around grid
-const TOTAL = GRID * CELL + PAD * 2;  // total canvas width/height
+const SIZE   = 238;
+const CX     = SIZE / 2;
+const CY     = SIZE / 2;
+const CLIP_R = 95;   // clip-circle radius
 
 // ── Hash & PRNG ───────────────────────────────────────────────────────────────
 
-/** FNV-1a 32-bit hash — fast, good avalanche, pure JS. */
 function fnv1a32(str) {
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) {
@@ -27,147 +27,148 @@ function fnv1a32(str) {
   return h;
 }
 
-/**
- * Derive a deterministic 32-bit seed from the three identity fields.
- * Null-bytes separate fields to prevent collisions across boundaries.
- */
 function computeSeed(agentId, createdAt, platform) {
+  if (!agentId || !createdAt || !platform)
+    throw new Error('generateFingerprint: agentId, createdAt, and platform are required');
   return fnv1a32(`${agentId}\0${createdAt}\0${platform}`);
 }
 
-/** xorshift32 — seeded PRNG returning floats in [0, 1). */
 function makePRNG(seed) {
   let s = (seed >>> 0) || 0xcafebabe;
-  return () => {
+  return function () {
     s ^= s << 13;
-    s ^= s >>> 17;
+    s ^= s >> 17;
     s ^= s << 5;
-    s >>>= 0;
-    return s / 0x100000000;
+    return s >>> 0;
   };
 }
 
-// ── Grid ──────────────────────────────────────────────────────────────────────
+// ── Color ─────────────────────────────────────────────────────────────────────
 
-/** Paint the classic QR-style 7×7 finder square at (r0, c0). */
-function drawFinder(grid, r0, c0) {
-  for (let r = 0; r < 7; r++) {
-    for (let c = 0; c < 7; c++) {
-      const outer = r === 0 || r === 6 || c === 0 || c === 6;
-      const inner = r >= 2 && r <= 4 && c >= 2 && c <= 4;
-      grid[r0 + r][c0 + c] = (outer || inner) ? 1 : 0;
-    }
-  }
+const PLATFORM_HUE = {
+  openai: 200, anthropic: 30, google: 140,
+  mistral: 270, meta: 220, cohere: 160, groq: 350,
+};
+
+function platformHue(platform) {
+  return PLATFORM_HUE[(platform || '').toLowerCase()] ?? 210;
 }
 
-/** Mark a rectangular zone as reserved (skipped during data fill). */
-function reserve(res, r0, c0, rows, cols) {
-  for (let r = r0; r < r0 + rows; r++)
-    for (let c = c0; c < c0 + cols; c++)
-      res[r][c] = 1;
-}
-
-function buildGrid(rand) {
-  const grid = Array.from({ length: GRID }, () => new Uint8Array(GRID));
-  const res  = Array.from({ length: GRID }, () => new Uint8Array(GRID));
-
-  // Three finder patterns (top-left, top-right, bottom-left) + 1-cell separators
-  drawFinder(grid, 0, 0);
-  drawFinder(grid, 0, GRID - 7);
-  drawFinder(grid, GRID - 7, 0);
-  reserve(res, 0, 0,        8, 8);
-  reserve(res, 0, GRID - 8, 8, 8);
-  reserve(res, GRID - 8, 0, 8, 8);
-
-  // Timing strips (row 6 / col 6 between finders — alternating dark/light)
-  for (let i = 8; i < GRID - 8; i++) {
-    const v = (i % 2 === 0) ? 1 : 0;
-    grid[6][i] = v;
-    grid[i][6] = v;
-    res[6][i] = 1;
-    res[i][6] = 1;
-  }
-
-  // Data cells — filled by PRNG
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      if (!res[r][c]) {
-        grid[r][c] = rand() < 0.5 ? 1 : 0;
-      }
-    }
-  }
-
-  return grid;
-}
-
-// ── Color theme ───────────────────────────────────────────────────────────────
-
-function deriveTheme(seed) {
-  const hue = seed % 360;
-  const sat = 55 + ((seed >>  8) & 0x1f);  // 55–86 %
-  const lum = 22 + ((seed >> 14) & 0x1f);  // 22–53 %
-  return {
-    dark : `hsl(${hue},${sat}%,${lum}%)`,
-    bg   : `hsl(${hue},${Math.round(sat * 0.12)}%,97%)`,
-    rim  : `hsl(${hue},${Math.round(sat * 0.3)}%,${lum + 30}%)`,
-  };
-}
-
-// ── SVG renderer ──────────────────────────────────────────────────────────────
-
-function renderSVG(grid, theme, agentId, createdAt, platform) {
-  const rects = [];
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      if (grid[r][c]) {
-        const x = PAD + c * CELL;
-        const y = PAD + r * CELL;
-        rects.push(
-          `<rect x="${x}" y="${y}" width="${CELL - 1}" height="${CELL - 1}" rx="1.5" fill="${theme.dark}"/>`
-        );
-      }
-    }
-  }
-
-  const label    = `${agentId.slice(0, 12)} · ${createdAt.slice(0, 10)} · ${platform}`;
-  const svgH     = TOTAL + 14;
-
-  return [
-    `<svg xmlns="http://www.w3.org/2000/svg"`,
-    `     width="${TOTAL}" height="${svgH}"`,
-    `     viewBox="0 0 ${TOTAL} ${svgH}"`,
-    `     role="img" aria-label="Fingerprint for ${agentId}">`,
-    `  <title>Agent Fingerprint · ${agentId}</title>`,
-    `  <rect width="${TOTAL}" height="${svgH}" rx="10" fill="${theme.bg}"/>`,
-    `  <rect x="3" y="3" width="${TOTAL - 6}" height="${svgH - 6}" rx="8"`,
-    `        fill="none" stroke="${theme.rim}" stroke-width="1.5"/>`,
-    ...rects.map(r => `  ${r}`),
-    `  <text x="${TOTAL / 2}" y="${svgH - 4}"`,
-    `        text-anchor="middle" font-family="monospace" font-size="7.5"`,
-    `        fill="${theme.dark}" opacity="0.55">${label}</text>`,
-    `</svg>`,
-  ].join('\n');
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Ridge builder ─────────────────────────────────────────────────────────────
 
 /**
- * Generate a deterministic SVG fingerprint for an AI agent.
- *
- * @param {string} agentId   - Unique agent identifier
- * @param {string} createdAt - ISO 8601 creation timestamp (e.g. "2024-01-15T08:30:00Z")
- * @param {string} platform  - Platform name (e.g. "openai", "anthropic", "google")
- * @returns {string} Complete SVG markup (inline-safe, no external deps)
+ * Generate ridge parameters for one ring.
+ * patType  0 = whorl  (near-circular, tight spiral feel)
+ *          1 = loop   (ellipses tilted progressively to one side)
+ *          2 = arch   (shallow flat arcs)
  */
-function generateFingerprint(agentId, createdAt, platform) {
-  if (!agentId || !createdAt || !platform) {
-    throw new Error('generateFingerprint requires agentId, createdAt, and platform');
+function ridgeParams(i, count, patType, rng) {
+  const t      = (i + 1) / count;
+  const baseR  = 4 + i * (CLIP_R - 4) / count;
+
+  let rx, ry, rotDeg;
+
+  if (patType === 0) {
+    // Whorl — near-circular with slight wobble
+    rx     = baseR * (0.97 + (rng() % 7) / 100);
+    ry     = baseR * (0.84 + (rng() % 14) / 100);
+    rotDeg = (i * 17 + (rng() % 40)) % 360;
+  } else if (patType === 1) {
+    // Loop — progressively tilted
+    rx     = baseR;
+    ry     = baseR * (0.42 + t * 0.48);
+    rotDeg = ((28 - i * 2) + (rng() % 12) - 6 + 720) % 360;
+  } else {
+    // Arch — flat, low curvature
+    rx     = baseR;
+    ry     = baseR * (0.20 + t * 0.28 + (rng() % 10) / 100);
+    rotDeg = ((rng() % 20) - 10 + 360) % 360;
   }
-  const seed  = computeSeed(agentId, createdAt, platform);
-  const rand  = makePRNG(seed);
-  const grid  = buildGrid(rand);
-  const theme = deriveTheme(seed);
-  return renderSVG(grid, theme, agentId, createdAt, platform);
+
+  // Ridge endings — 0-2 breaks per ring
+  const circumference = 2 * Math.PI * Math.sqrt((rx * rx + ry * ry) / 2);
+  const breaks        = rng() % 3;
+  let dashAttr = '';
+  if (breaks > 0) {
+    const seg     = breaks * 2 + 1;
+    const dashOn  = (circumference / seg * 0.80).toFixed(1);
+    const dashOff = (circumference / seg * 0.20).toFixed(1);
+    dashAttr = ` stroke-dasharray="${dashOn} ${dashOff}"`;
+  }
+
+  const strokeW = (0.65 + (1 - t) * 0.75).toFixed(2);
+  const opacity = (0.48 + t * 0.42).toFixed(2);
+
+  return { rx, ry, rotDeg, dashAttr, strokeW, opacity };
+}
+
+// ── Main generator ────────────────────────────────────────────────────────────
+
+function generateFingerprint(agentId, createdAt, platform) {
+  const seed = computeSeed(agentId, createdAt, platform);
+  const rng  = makePRNG(seed);
+
+  // Color
+  const baseHue = platformHue(platform);
+  const hShift  = (seed % 51) - 25;
+  const h       = ((baseHue + hShift) % 360 + 360) % 360;
+
+  // Pattern type
+  const patType = seed % 3;  // 0=whorl, 1=loop, 2=arch
+
+  // Core offset (slightly off-center for realism)
+  const coreX = CX + ((rng() % 25) - 12);
+  const coreY = CY + ((rng() % 21) - 10);
+
+  const RIDGE_COUNT = 14 + (seed % 9);  // 14-22
+  const clipId      = `fp${(seed & 0xffff).toString(16).padStart(4, '0')}`;
+
+  // Build ridge SVG strings
+  let ridges = '';
+  for (let i = 0; i < RIDGE_COUNT; i++) {
+    const { rx, ry, rotDeg, dashAttr, strokeW, opacity } =
+      ridgeParams(i, RIDGE_COUNT, patType, rng);
+
+    const cx  = coreX.toFixed(1);
+    const cy  = coreY.toFixed(1);
+    const rot = rotDeg.toFixed(1);
+
+    ridges += `<ellipse cx="${cx}" cy="${cy}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" `
+            + `transform="rotate(${rot},${cx},${cy})" `
+            + `fill="none" stroke="hsl(${h},40%,28%)" stroke-width="${strokeW}"`
+            + `${dashAttr} opacity="${opacity}"/>\n    `;
+  }
+
+  // Core point
+  const core = `<circle cx="${coreX.toFixed(1)}" cy="${coreY.toFixed(1)}" r="2.5" `
+             + `fill="hsl(${h},42%,32%)" opacity="0.7"/>`;
+
+  // Delta landmark
+  const dx = (coreX + 22 + (rng() % 18)).toFixed(1);
+  const dy = (coreY + (rng() % 20) - 10).toFixed(1);
+  const delta = `<circle cx="${dx}" cy="${dy}" r="2" fill="hsl(${h},38%,30%)" opacity="0.45"/>`;
+
+  // Subtle inner glow near core
+  const glow = `<circle cx="${coreX.toFixed(1)}" cy="${coreY.toFixed(1)}" r="18" `
+             + `fill="hsl(${h},30%,70%)" opacity="0.08"/>`;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}">
+  <title>Agent fingerprint: ${agentId}</title>
+  <defs>
+    <clipPath id="${clipId}">
+      <circle cx="${CX}" cy="${CY}" r="${CLIP_R}"/>
+    </clipPath>
+  </defs>
+  <rect width="${SIZE}" height="${SIZE}" fill="hsl(${h},8%,96%)"/>
+  <circle cx="${CX}" cy="${CY}" r="${CLIP_R}" fill="hsl(${h},22%,93%)"/>
+  <g clip-path="url(#${clipId})">
+    ${glow}
+    ${ridges}
+    ${core}
+    ${delta}
+  </g>
+  <circle cx="${CX}" cy="${CY}" r="${CLIP_R}" fill="none" stroke="hsl(${h},30%,60%)" stroke-width="1.5"/>
+</svg>`;
 }
 
 module.exports = { generateFingerprint, computeSeed };

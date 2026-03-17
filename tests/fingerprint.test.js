@@ -62,7 +62,7 @@ for (const { agentId, createdAt, platform } of AGENTS) {
   assert(svg.trimEnd().endsWith('</svg>'),                        `${agentId}: ends with </svg>`);
   assert(svg.includes('xmlns="http://www.w3.org/2000/svg"'),      `${agentId}: has SVG namespace`);
   assert(svg.includes('<title>'),                                  `${agentId}: has <title> for a11y`);
-  assert((svg.match(/<rect/g) || []).length > 50,                 `${agentId}: contains enough <rect> cells`);
+  assert((svg.match(/<ellipse/g) || []).length > 5,               `${agentId}: contains ridge ellipses`);
 }
 
 // ── Test 4: Seed sensitivity ──────────────────────────────────────────────────
