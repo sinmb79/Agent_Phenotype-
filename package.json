@@ -4,10 +4,12 @@
   "description": "Auto-generates visual identity (fingerprint, face, palm line) for AI agents — 22B Labs",
   "main": "src/index.js",
   "scripts": {
-    "test": "node tests/fingerprint.test.js && node tests/face.test.js && node tests/palmline.test.js",
+    "start": "node src/api/server.js",
+    "test": "node tests/fingerprint.test.js && node tests/face.test.js && node tests/palmline.test.js && node tests/api.test.js",
     "test:fingerprint": "node tests/fingerprint.test.js",
     "test:face": "node tests/face.test.js",
-    "test:palmline": "node tests/palmline.test.js"
+    "test:palmline": "node tests/palmline.test.js",
+    "test:api": "node tests/api.test.js"
   },
   "keywords": ["agent", "identity", "svg", "generative", "ai"],
   "license": "MIT",
