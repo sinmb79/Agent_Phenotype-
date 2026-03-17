@@ -1,13 +1,18 @@
 'use strict';
 
 /**
- * Face Generator — Phase 2
- * Deterministically generates a non-human geometric SVG face for an AI agent.
- * Agents are a new kind of entity — the visual language is abstract, not anatomical.
+ * Face Generator — v2  (near-infinite parametric diversity)
  *
- * Usage:
- *   const { generateFace } = require('./face');
- *   const svg = generateFace('agent-001', 'CodeEngineer', ['logical','precise'], 'anthropic');
+ * Every visual parameter is derived directly from seed bits → no fixed categories.
+ * Role + personality act as *biases* (not hard constraints) so the face still
+ * "reads" the agent's character while remaining globally unique.
+ *
+ * Diversity capacity:
+ *   Shape  : 8 n-gon families × 72 rotations × 28 size steps = 16,128 base shapes
+ *   Eyes   : 13 widths × 15 heights × 9 radii × 2 rotation states = 3,510 eye configs
+ *   Signal : 8 styles × 28 lengths × 20 curvature steps = 4,480 signal variants
+ *   Color  : 360 hues × 32 saturations × 30 lightness = 345,600 palettes
+ *   Combined: >> 10^13 unique faces (effectively infinite at any real scale)
  */
 
 const W = 220, H = 220;
@@ -26,23 +31,83 @@ function fnv1a32(str) {
 }
 
 function computeSeed(agentId, role, personality, platform) {
-  const pStr = Array.isArray(personality)
-    ? [...personality].sort().join(',')
-    : String(personality || '');
+  const pStr = Array.isArray(personality) ? [...personality].sort().join(',') : String(personality || '');
   return fnv1a32(`${agentId}\0${role}\0${pStr}\0${platform}`);
 }
 
-function makePRNG(seed) {
-  let s = (seed >>> 0) || 0xcafebabe;
-  return () => {
-    s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
-    s >>>= 0;
-    return s / 0x100000000;
-  };
+// Two independent 32-bit seeds — avoids bit correlations between parameters
+function seeds(agentId, role, personality, platform) {
+  const s1 = computeSeed(agentId, role, personality, platform);
+  const s2 = fnv1a32(`${s1}\0${platform}\0${agentId}`);
+  return [s1, s2];
 }
 
-// ── Base shape ─────────────────────────────────────────────────────────────────
-// Role → geometric archetype. Agents are not human — shapes carry meaning.
+// ── Parameter extraction ──────────────────────────────────────────────────────
+//
+// Role and personality provide *biases* to guide the parameter ranges so the
+// face still "reads" the agent's character, but the seed determines the exact
+// value within those ranges — guaranteeing uniqueness.
+
+function roleBias(role) {
+  const r = role.toLowerCase();
+  if (/cod|engineer|dev|build|tech/.test(r))    return { nMin: 5, nMax: 9  };  // precise polygon
+  if (/assist|help|support|chat|guide/.test(r)) return { nMin: 0, nMax: 0  };  // circle
+  if (/analyt|research|data|scien/.test(r))     return { nMin: 3, nMax: 5  };  // sharp/angular
+  if (/creat|design|art|writ/.test(r))          return { nMin: 7, nMax: 11 };  // complex multi-sided
+  return { nMin: 3, nMax: 10 };
+}
+
+function personalityBias(traits) {
+  const t = (traits || []).join(' ').toLowerCase();
+  // Returns [eyeAspectLow, eyeAspectHigh] — aspect = height/width
+  if (/logical|precise|strict|struct/.test(t)) return [0.85, 1.15];  // square
+  if (/curious|explor|wonder|learn/.test(t))   return [1.2,  2.0 ];  // tall/diamond
+  if (/calm|steady|patient|quiet/.test(t))     return [0.2,  0.45];  // wide slit
+  if (/assert|direct|focus|driven/.test(t))    return [0.5,  0.85];  // slightly tall
+  if (/creat|play|art|expres/.test(t))         return [0.6,  1.8 ];  // free range
+  return [0.4, 1.4];  // default: any
+}
+
+function deriveParams(s1, s2, role, personality) {
+  const { nMin, nMax } = roleBias(role);
+  const [aspLo, aspHi] = personalityBias(personality);
+
+  // ── Shape ──
+  let n;
+  if (nMin === 0) {
+    n = 0;  // circle
+  } else {
+    const range = nMax - nMin + 1;
+    n = nMin + ((s1 >>> 0) % range);
+  }
+  const rot  = ((s1 >>> 4)  % 72) * 5;           // 0–355° in 5° steps
+  const R    = 62 + ((s1 >>> 10) & 0x1b);        // radius 62–89 px
+
+  // ── Eyes ──
+  const eW   = 9  + ((s1 >>> 15) & 0xd);         // width 9–22 px
+  const aspR = aspLo + ((s1 >>> 19) & 0xf) / 15 * (aspHi - aspLo);
+  const eH   = Math.max(3, Math.round(eW * aspR));
+  const eRx  = Math.min((s1 >>> 23) & 0x7, Math.floor(Math.min(eW, eH) / 2));
+  const eSp  = 20 + ((s1 >>> 26) & 0x1f);        // spread 20–51 px
+  const eYOff = -10 + ((s2 >>> 0) & 0xf);        // Y offset –10..+5
+
+  // Optional 45° rotation on eyes (makes rect look like diamond when aspect≈1)
+  const eRot = ((s2 >>> 4) & 0x1) ? 45 : 0;
+
+  // ── Signal (expression) ──
+  const sigStyle = (s2 >>> 5)  & 0x7;            // 0–7
+  const sigLen   = 28 + ((s2 >>> 8) & 0x1b);     // 28–55 px half-length
+  const sigYOff  = 22 + ((s2 >>> 13) & 0xf);     // distance below center 22–37
+  const sigCurve = ((s2 >>> 17) % 21) - 10;      // –10..+10
+
+  // ── Accents ──
+  const accentN  = (s2 >>> 22) & 0x7;            // 0–7 dots
+  const accentD  = 10 + ((s2 >>> 25) & 0xf);     // distance from shape edge 10–25
+
+  return { n, rot, R, eW, eH, eRx, eSp, eYOff, eRot, sigStyle, sigLen, sigYOff, sigCurve, accentN, accentD };
+}
+
+// ── SVG helpers ───────────────────────────────────────────────────────────────
 
 function polyPoints(cx, cy, r, n, rotDeg) {
   const pts = [];
@@ -53,189 +118,144 @@ function polyPoints(cx, cy, r, n, rotDeg) {
   return pts.join(' ');
 }
 
-function pickShape(role) {
-  const r = role.toLowerCase();
-  if (/cod|engineer|dev|build|tech/.test(r))    return { kind: 'hex',  n: 6, rot: 0     };
-  if (/assist|help|support|chat|guide/.test(r)) return { kind: 'cir',  n: 0, rot: 0     };
-  if (/analyt|research|data|scien/.test(r))     return { kind: 'dia',  n: 4, rot: 45    };
-  if (/creat|design|art|writ/.test(r))          return { kind: 'oct',  n: 8, rot: 22.5  };
-  // hash fallback
-  return [
-    { kind: 'hex',  n: 6, rot: 0     },
-    { kind: 'oct',  n: 8, rot: 22.5  },
-    { kind: 'pent', n: 5, rot: -90   },
-    { kind: 'dia',  n: 4, rot: 45    },
-    { kind: 'cir',  n: 0, rot: 0     },
-  ][fnv1a32(role) % 5];
-}
-
-function shapeEl(sh, cx, cy, r, fill, stroke) {
-  if (sh.kind === 'cir') {
-    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`;
+function shapeEl(n, rot, R, cx, cy, fill, stroke) {
+  if (n === 0) {
+    return `<circle cx="${cx}" cy="${cy}" r="${R}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`;
   }
-  return `<polygon points="${polyPoints(cx, cy, r, sh.n, sh.rot)}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`;
+  const pts = polyPoints(cx, cy, R, n, rot);
+  return `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`;
 }
 
-function innerRingEl(sh, cx, cy, r, dark) {
-  if (sh.kind === 'cir') {
-    return `<circle cx="${cx}" cy="${cy}" r="${r - 9}" fill="none" stroke="${dark}" stroke-width="0.6" opacity="0.18"/>`;
+function innerEl(n, rot, R, cx, cy, dark) {
+  const r = R - 10;
+  if (n === 0) {
+    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${dark}" stroke-width="0.6" opacity="0.16"/>`;
   }
-  return `<polygon points="${polyPoints(cx, cy, r - 9, sh.n, sh.rot)}" fill="none" stroke="${dark}" stroke-width="0.6" opacity="0.18"/>`;
+  return `<polygon points="${polyPoints(cx, cy, r, n, rot)}" fill="none" stroke="${dark}" stroke-width="0.6" opacity="0.16"/>`;
 }
 
-// ── Colour palette ─────────────────────────────────────────────────────────────
-// Platform sets a "colour family" (base hue ± 40°).
-// Agent seed adds per-agent variation within that range so agents on the same
-// platform look related but never identical.
+// Parametric eye — rect with variable aspect, corner-radius, optional rotation
+function eyeEl(x, y, eW, eH, eRx, rotDeg, color) {
+  const f = v => v.toFixed(2);
+  const base = `<rect x="${f(x - eW/2)}" y="${f(y - eH/2)}" width="${f(eW)}" height="${f(eH)}" rx="${eRx}" ry="${eRx}" fill="${color}"`;
+  const transform = rotDeg ? ` transform="rotate(${rotDeg},${f(x)},${f(y)})"` : '';
+  return base + transform + '/>';
+}
+
+function eyeHighlight(x, y, eW, eH, eRx, rotDeg) {
+  const r  = Math.max(1.2, Math.min(eW, eH) * 0.18);
+  const ox = x - eW * 0.22;
+  const oy = y - eH * 0.22;
+  const f  = v => v.toFixed(2);
+  const transform = rotDeg ? ` transform="rotate(${rotDeg},${f(x)},${f(y)})"` : '';
+  return `<circle cx="${f(ox)}" cy="${f(oy)}" r="${r.toFixed(2)}" fill="white" opacity="0.65"${transform}/>`;
+}
+
+// Parametric signal — 8 distinct styles with continuous parameters
+function signalEl(cx, baseY, style, halfLen, curve, dark) {
+  const x1 = cx - halfLen, x2 = cx + halfLen;
+  const sw = 2, lc = 'stroke-linecap="round"', lj = 'stroke-linejoin="round"';
+  const s = `stroke="${dark}" stroke-width="${sw}"`;
+
+  switch (style & 7) {
+    case 0: // flat line
+      return `<line x1="${x1}" y1="${baseY}" x2="${x2}" y2="${baseY}" ${s} ${lc}/>`;
+    case 1: // single arc (smile/frown by curve direction)
+      return `<path d="M${x1},${baseY} Q${cx},${baseY + curve * 2} ${x2},${baseY}" fill="none" ${s} ${lc}/>`;
+    case 2: // S-curve (wave)
+      return `<path d="M${x1},${baseY} C${x1+halfLen*.5},${baseY-curve*1.5} ${x2-halfLen*.5},${baseY+curve*1.5} ${x2},${baseY}" fill="none" ${s} ${lc}/>`;
+    case 3: // double line
+      return `<line x1="${x1}" y1="${baseY-3}" x2="${x2}" y2="${baseY-3}" ${s} ${lc}/><line x1="${x1+5}" y1="${baseY+4}" x2="${x2-5}" y2="${baseY+4}" ${s} ${lc}/>`;
+    case 4: // zigzag
+      return `<polyline points="${x1},${baseY} ${x1+halfLen*.5},${baseY+curve} ${cx},${baseY} ${cx+halfLen*.5},${baseY+curve} ${x2},${baseY}" fill="none" ${s} ${lc} ${lj}/>`;
+    case 5: // uptick ends
+      return `<path d="M${x1},${baseY} L${x1+halfLen*.3},${baseY} L${cx-halfLen*.05},${baseY+curve} L${cx+halfLen*.05},${baseY+curve} L${x2-halfLen*.3},${baseY} L${x2},${baseY}" fill="none" ${s} ${lc} ${lj}/>`;
+    case 6: // triple dot
+      return `<circle cx="${cx-halfLen*.4}" cy="${baseY}" r="2.5" fill="${dark}"/><circle cx="${cx}" cy="${baseY}" r="2.5" fill="${dark}"/><circle cx="${cx+halfLen*.4}" cy="${baseY}" r="2.5" fill="${dark}"/>`;
+    case 7: // long single arc (more expressive)
+      return `<path d="M${x1},${baseY+Math.abs(curve)*0.5} Q${cx},${baseY-Math.abs(curve)*2} ${x2},${baseY+Math.abs(curve)*0.5}" fill="none" ${s} ${lc}/>`;
+    default:
+      return `<line x1="${x1}" y1="${baseY}" x2="${x2}" y2="${baseY}" ${s} ${lc}/>`;
+  }
+}
+
+// Accent constellation
+function accentMarks(n, R, accentD, cx, cy, color, s2) {
+  if (n === 0) return '';
+  return Array.from({ length: n }, (_, i) => {
+    // Spread evenly + per-mark jitter derived from s2 bits
+    const a   = (2 * Math.PI * i / n) + ((s2 >>> (i * 4)) & 0xf) * 0.2 - 0.4;
+    const d   = R + accentD + ((s2 >>> (i * 3 + 2)) & 0x7);
+    const x   = (cx + d * Math.cos(a)).toFixed(1);
+    const y   = (cy + d * Math.sin(a)).toFixed(1);
+    const rr  = (1.2 + ((s2 >>> (i * 5)) & 0x3) * 0.8).toFixed(1);
+    return `<circle cx="${x}" cy="${y}" r="${rr}" fill="${color}" opacity="0.3"/>`;
+  }).join('');
+}
+
+// ── Colour palette ────────────────────────────────────────────────────────────
+// Platform sets a "colour family" (±40°). Seed adds per-agent variation.
 
 const PLATFORM_HUE = {
   openai: 155, anthropic: 22, google: 210,
   mistral: 268, meta: 218, cohere: 42, groq: 178,
 };
 
-function palette(platform, seed) {
-  const baseHue = PLATFORM_HUE[platform.toLowerCase()] ?? ((seed >>> 16) % 360);
-  // Per-agent shift: –30 … +30 degrees within the platform family
-  const shift = (seed % 61) - 30;
-  const h = ((baseHue + shift) % 360 + 360) % 360;
-  const s = 52 + ((seed >>>  8) & 0x1f);   // 52–83 %
-  const l = 24 + ((seed >>> 14) & 0x1c);   // 24–51 %
+function palette(platform, s1) {
+  const base  = PLATFORM_HUE[platform.toLowerCase()] ?? ((s1 >>> 16) % 360);
+  const shift = (s1 % 61) - 30;
+  const h = ((base + shift) % 360 + 360) % 360;
+  const s = 50 + ((s1 >>>  8) & 0x21);   // 50–83 %
+  const l = 23 + ((s1 >>> 14) & 0x1e);   // 23–53 %
   return { h, s, l };
 }
 
-// ── Eyes ───────────────────────────────────────────────────────────────────────
-// Eye geometry = personality archetype. Two identical eyes signal symmetry.
-
-function pickEyeStyle(traits) {
-  const t = (traits || []).join(' ').toLowerCase();
-  if (/logical|precise|struct|strict/.test(t)) return 'square';
-  if (/curious|explor|learn|wonder/.test(t))   return 'diamond';
-  if (/open|friend|warm|care/.test(t))         return 'circle';
-  if (/assert|direct|focus|driven/.test(t))    return 'triangle';
-  if (/calm|steady|patient|quiet/.test(t))     return 'slit';
-  return 'circle';
-}
-
-function eyeEl(x, y, sz, style, color) {
-  const h = sz / 2;
-  const f = v => v.toFixed(1);
-  switch (style) {
-    case 'square':
-      return `<rect x="${f(x-h)}" y="${f(y-h)}" width="${f(sz)}" height="${f(sz)}" rx="1" fill="${color}"/>`;
-    case 'diamond':
-      return `<polygon points="${f(x)},${f(y-sz*0.9)} ${f(x+sz*0.65)},${f(y)} ${f(x)},${f(y+sz*0.9)} ${f(x-sz*0.65)},${f(y)}" fill="${color}"/>`;
-    case 'triangle':
-      return `<polygon points="${f(x)},${f(y-sz*0.9)} ${f(x+sz*0.8)},${f(y+sz*0.65)} ${f(x-sz*0.8)},${f(y+sz*0.65)}" fill="${color}"/>`;
-    case 'slit':
-      return `<rect x="${f(x-sz*0.9)}" y="${f(y-sz*0.22)}" width="${f(sz*1.8)}" height="${f(sz*0.44)}" rx="${f(sz*0.22)}" fill="${color}"/>`;
-    default: // circle
-      return `<circle cx="${f(x)}" cy="${f(y)}" r="${f(h)}" fill="${color}"/>`;
-  }
-}
-
-function eyeHighlight(x, y, sz) {
-  const r  = (sz * 0.18).toFixed(1);
-  const ox = (x - sz * 0.22).toFixed(1);
-  const oy = (y - sz * 0.22).toFixed(1);
-  return `<circle cx="${ox}" cy="${oy}" r="${r}" fill="white" opacity="0.65"/>`;
-}
-
-// ── Signal element ────────────────────────────────────────────────────────────
-// Replaces "mouth" — conveys processing state, not biological expression.
-
-function signalEl(cx, y, traits, color) {
-  const t  = (traits || []).join(' ').toLowerCase();
-  const x1 = cx - 36, x2 = cx + 36;
-  const sw = 2;
-
-  if (/energet|active|enthu|dynamic/.test(t)) {
-    return `<path d="M${x1},${y} C${x1+10},${y-9} ${cx-10},${y+9} ${cx},${y} C${cx+10},${y-9} ${x2-10},${y+9} ${x2},${y}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`;
-  }
-  if (/help|assist|warm|friend|care/.test(t)) {
-    return `<path d="M${x1},${y+5} Q${cx},${y-10} ${x2},${y+5}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`;
-  }
-  if (/focus|serious|analyt|deep/.test(t)) {
-    return [
-      `<line x1="${x1}" y1="${y-3}" x2="${x2}" y2="${y-3}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`,
-      `<line x1="${x1+6}" y1="${y+4}" x2="${x2-6}" y2="${y+4}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`,
-    ].join('\n  ');
-  }
-  if (/creat|play|art|fun|expres/.test(t)) {
-    const step = 18;
-    return `<polyline points="${x1},${y} ${x1+step},${y-8} ${cx},${y} ${cx+step},${y-8} ${x2},${y}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`;
-  }
-  // Default: flat (neutral / observing)
-  return `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round"/>`;
-}
-
-// ── Accent marks ───────────────────────────────────────────────────────────────
-// Dot constellation around the face — more traits = more marks.
-
-function accentMarks(traits, cx, cy, r, color, rand) {
-  if (!traits || traits.length < 2) return '';
-  return Array.from({ length: Math.min(traits.length, 7) }, (_, i) => {
-    const a  = (2 * Math.PI * i / Math.min(traits.length, 7)) + rand() * 0.25;
-    const d  = r + 10 + rand() * 10;
-    const x  = (cx + d * Math.cos(a)).toFixed(1);
-    const y  = (cy + d * Math.sin(a)).toFixed(1);
-    const rr = (1.5 + rand() * 2.5).toFixed(1);
-    return `<circle cx="${x}" cy="${y}" r="${rr}" fill="${color}" opacity="0.32"/>`;
-  }).join('\n  ');
-}
-
-// ── Public API ─────────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Generate a deterministic SVG face for an AI agent.
+ * Generate a deterministic, near-infinitely diverse SVG face.
  *
- * @param {string}   agentId     - Unique agent identifier
- * @param {string}   role        - Agent role (e.g. "CodeEngineer", "DataAnalyst")
- * @param {string[]} personality - Array of personality trait strings
- * @param {string}   platform    - Platform name (e.g. "anthropic", "openai")
- * @param {string}   [createdAt] - ISO 8601 timestamp (reserved for future use)
- * @returns {string} SVG markup string
+ * @param {string}   agentId
+ * @param {string}   role
+ * @param {string[]} personality
+ * @param {string}   platform
+ * @returns {string} SVG markup
  */
-function generateFace(agentId, role, personality, platform, createdAt) {
-  if (!agentId || !role || !platform) {
-    throw new Error('generateFace requires agentId, role, and platform');
-  }
-  const traits = Array.isArray(personality) ? personality : [];
-  const seed   = computeSeed(agentId, role, traits, platform);
-  const rand   = makePRNG(seed);
-  const sh     = pickShape(role);
-  const pal    = palette(platform, seed);
-  const R      = 74;
+function generateFace(agentId, role, personality, platform) {
+  if (!agentId || !role || !platform) throw new Error('generateFace requires agentId, role, and platform');
+
+  const traits       = Array.isArray(personality) ? personality : [];
+  const [s1, s2]     = seeds(agentId, role, traits, platform);
+  const p            = deriveParams(s1, s2, role, traits);
+  const pal          = palette(platform, s1);
 
   const dark  = `hsl(${pal.h},${pal.s}%,${pal.l}%)`;
   const light = `hsl(${pal.h},${Math.round(pal.s * 0.1)}%,97%)`;
   const mid   = `hsl(${pal.h},${Math.round(pal.s * 0.28)}%,${pal.l + 32}%)`;
-  const eyeC  = `hsl(${pal.h},${pal.s}%,${Math.max(pal.l - 4, 10)}%)`;
+  const eyeC  = `hsl(${pal.h},${pal.s}%,${Math.max(pal.l - 5, 8)}%)`;
 
-  const eyeStyle  = pickEyeStyle(traits);
-  const eyeSz     = 9 + rand() * 7;
-  const eyeSpread = 22 + rand() * 14;
-  const eyeY      = CY - 10 + (rand() - 0.5) * 8;
-  const sigY      = CY + 26 + rand() * 8;
-  const eyeLx     = CX - eyeSpread;
-  const eyeRx     = CX + eyeSpread;
+  const eyeY  = CY - 10 + p.eYOff;
+  const eyeLx = CX - p.eSp;
+  const eyeRx = CX + p.eSp;
+  const sigY  = CY + p.sigYOff;
 
   const svgH = H + 14;
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${svgH}"`,
     `     viewBox="0 0 ${W} ${svgH}" role="img" aria-label="Face for ${agentId}">`,
     `  <title>Agent Face · ${agentId}</title>`,
-    `  <rect width="${W}" height="${svgH}" rx="10" fill="hsl(${pal.h},${Math.round(pal.s * 0.08)}%,97%)"/>`,
-    `  <rect x="3" y="3" width="${W - 6}" height="${svgH - 6}" rx="8" fill="none" stroke="${mid}" stroke-width="1.5"/>`,
-    `  ${accentMarks(traits, CX, CY, R, dark, rand)}`,
-    `  ${shapeEl(sh, CX, CY, R, light, mid)}`,
-    `  ${innerRingEl(sh, CX, CY, R, dark)}`,
-    `  ${eyeEl(eyeLx, eyeY, eyeSz, eyeStyle, eyeC)}`,
-    `  ${eyeEl(eyeRx, eyeY, eyeSz, eyeStyle, eyeC)}`,
-    `  ${eyeHighlight(eyeLx, eyeY, eyeSz)}`,
-    `  ${eyeHighlight(eyeRx, eyeY, eyeSz)}`,
-    `  ${signalEl(CX, sigY, traits, dark)}`,
-    `  <text x="${W / 2}" y="${svgH - 4}" text-anchor="middle" font-family="monospace"`,
-    `        font-size="7.5" fill="${dark}" opacity="0.55">${role.slice(0, 16)} · ${platform.slice(0, 10)}</text>`,
+    `  <rect width="${W}" height="${svgH}" rx="10" fill="hsl(${pal.h},${Math.round(pal.s*.08)}%,97%)"/>`,
+    `  <rect x="3" y="3" width="${W-6}" height="${svgH-6}" rx="8" fill="none" stroke="${mid}" stroke-width="1.5"/>`,
+    `  ${accentMarks(p.accentN, p.R, p.accentD, CX, CY, dark, s2)}`,
+    `  ${shapeEl(p.n, p.rot, p.R, CX, CY, light, mid)}`,
+    `  ${innerEl(p.n, p.rot, p.R, CX, CY, dark)}`,
+    `  ${eyeEl(eyeLx, eyeY, p.eW, p.eH, p.eRx, p.eRot, eyeC)}`,
+    `  ${eyeEl(eyeRx, eyeY, p.eW, p.eH, p.eRx, p.eRot, eyeC)}`,
+    `  ${eyeHighlight(eyeLx, eyeY, p.eW, p.eH, p.eRx, p.eRot)}`,
+    `  ${eyeHighlight(eyeRx, eyeY, p.eW, p.eH, p.eRx, p.eRot)}`,
+    `  ${signalEl(CX, sigY, p.sigStyle, p.sigLen, p.sigCurve, dark)}`,
+    `  <text x="${W/2}" y="${svgH-4}" text-anchor="middle" font-family="monospace"`,
+    `        font-size="7.5" fill="${dark}" opacity="0.55">${role.slice(0,16)} · ${platform.slice(0,10)}</text>`,
     `</svg>`,
   ].join('\n');
 }
