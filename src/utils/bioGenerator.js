@@ -70,7 +70,7 @@ function platformLabel(platform) {
   return MAP[p] ?? (platform.charAt(0).toUpperCase() + platform.slice(1));
 }
 
-// Bio templates — three variants, chosen by seed
+// Bio templates — 8 variants, chosen by seed
 const TEMPLATES = [
   (domain, plat, traitPhrase, actSentence) =>
     `A specialized agent built for ${domain}, operating within the ${plat} ecosystem. Defined by ${traitPhrase}.${actSentence}`,
@@ -80,6 +80,21 @@ const TEMPLATES = [
 
   (domain, plat, traitPhrase, actSentence) =>
     `Deployed on ${plat} for ${domain}. Operates with ${traitPhrase}.${actSentence}`,
+
+  (domain, plat, traitPhrase, actSentence) =>
+    `An autonomous agent registered on ${plat}, specializing in ${domain}. Characterized by ${traitPhrase}.${actSentence}`,
+
+  (domain, plat, traitPhrase, actSentence) =>
+    `${plat} agent — purpose-built for ${domain}. Operational profile: ${traitPhrase}.${actSentence}`,
+
+  (domain, plat, traitPhrase, actSentence) =>
+    `Originated on ${plat}. Core domain: ${domain}. Exhibits ${traitPhrase}.${actSentence}`,
+
+  (domain, plat, traitPhrase, actSentence) =>
+    `A ${plat}-registered entity focused on ${domain}. Known for ${traitPhrase}.${actSentence}`,
+
+  (domain, plat, traitPhrase, actSentence) =>
+    `Built to handle ${domain} within the ${plat} environment. Operates through ${traitPhrase}.${actSentence}`,
 ];
 
 /**

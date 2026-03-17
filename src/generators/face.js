@@ -84,16 +84,22 @@ function innerRingEl(sh, cx, cy, r, dark) {
 }
 
 // ── Colour palette ─────────────────────────────────────────────────────────────
+// Platform sets a "colour family" (base hue ± 40°).
+// Agent seed adds per-agent variation within that range so agents on the same
+// platform look related but never identical.
 
 const PLATFORM_HUE = {
-  openai: 158, anthropic: 28, google: 213,
-  mistral: 270, meta: 220, cohere: 45, groq: 180,
+  openai: 155, anthropic: 22, google: 210,
+  mistral: 268, meta: 218, cohere: 42, groq: 178,
 };
 
 function palette(platform, seed) {
-  const h = PLATFORM_HUE[platform.toLowerCase()] ?? (seed % 360);
-  const s = 55 + ((seed >>  8) & 0x1f);
-  const l = 26 + ((seed >> 14) & 0x18);
+  const baseHue = PLATFORM_HUE[platform.toLowerCase()] ?? ((seed >>> 16) % 360);
+  // Per-agent shift: –30 … +30 degrees within the platform family
+  const shift = (seed % 61) - 30;
+  const h = ((baseHue + shift) % 360 + 360) % 360;
+  const s = 52 + ((seed >>>  8) & 0x1f);   // 52–83 %
+  const l = 24 + ((seed >>> 14) & 0x1c);   // 24–51 %
   return { h, s, l };
 }
 
