@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Agent Visual Identity System — 22B Labs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #0a0a10; color: #e0e0e8;
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; padding: 56px 24px 80px;
+    }
+    header { text-align: center; margin-bottom: 64px; }
+    header h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; color: #f4f4fc; }
+    header h1 span { opacity: 0.4; }
+    header p  { margin-top: 12px; font-size: 0.92rem; color: #6a6a88; max-width: 560px; line-height: 1.6; }
+    .badges { display: flex; gap: 8px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+    .badge {
+      font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #555577; border: 1px solid #2a2a40; border-radius: 100px; padding: 3px 10px;
+    }
+
+    /* ── Agent sections ── */
+    .agents { display: flex; flex-direction: column; gap: 56px; width: 100%; max-width: 1060px; }
+    .agent-section { }
+    .agent-header {
+      display: flex; align-items: center; gap: 14px; margin-bottom: 24px;
+      padding-bottom: 16px; border-bottom: 1px solid #181828;
+    }
+    .agent-name { font-size: 1.1rem; font-weight: 600; color: #d8d8f0; }
+    .agent-sub  { font-size: 0.8rem; color: #55557a; margin-top: 2px; }
+    .agent-age  {
+      font-size: 0.65rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+      padding: 3px 9px; border-radius: 100px; border: 1px solid; margin-left: auto;
+    }
+    .age-new     { color: #5a8a6a; border-color: #2a4a3a; background: #0d1510; }
+    .age-mid     { color: #8a7a3a; border-color: #4a3a1a; background: #14110a; }
+    .age-veteran { color: #8a4a3a; border-color: #4a2a1a; background: #150e0a; }
+
+    /* ── Three layers side by side ── */
+    .layers { display: flex; flex-wrap: wrap; gap: 20px; }
+    .layer {
+      background: #111118; border: 1px solid #1e1e30; border-radius: 14px;
+      padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 12px;
+      flex: 1; min-width: 190px;
+      transition: border-color 0.15s ease, transform 0.15s ease;
+    }
+    .layer:hover { border-color: #2e2e50; transform: translateY(-3px); }
+    .layer-label {
+      font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
+      color: #44446a; font-weight: 600;
+    }
+    .layer svg { display: block; filter: drop-shadow(0 4px 14px rgba(0,0,0,0.6)); }
+
+    footer { margin-top: 80px; font-size: 0.75rem; color: #2a2a44; text-align: center; }
+    footer a { color: #44447a; text-decoration: none; }
+    footer a:hover { color: #7070b0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Agent Visual Identity System <span>/ 22B Labs</span></h1>
+  <p>Three deterministic SVG layers automatically generated from agent configuration data.<br>
+     Every agent gets a unique fingerprint, face, and palm — same config always produces the same identity.</p>
+  <div class="badges">
+    <span class="badge">Layer 1 — Fingerprint</span>
+    <span class="badge">Layer 2 — Face</span>
+    <span class="badge">Layer 3 — Palm Line</span>
+  </div>
+</header>
+
+<div class="agents" id="output"></div>
+
+<footer>
+  Generated entirely in-browser · No server · No network requests ·
+  <a href="fingerprint-demo.html">Fingerprint Demo</a> ·
+  <a href="face-demo.html">Face Demo</a> ·
+  <a href="palmline-demo.html">Palm Line Demo</a>
+</footer>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+//  Shared utilities
+// ══════════════════════════════════════════════════════════════════════════════
+
+function fnv1a32(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); h >>>= 0; }
+  return h;
+}
+function makePRNG(seed) {
+  let s = (seed >>> 0) || 0xcafebabe;
+  return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 0x100000000; };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Layer 1: Fingerprint
+// ══════════════════════════════════════════════════════════════════════════════
+
+(function() {
+  const GRID=21, CELL=10, PAD=14, TOTAL=GRID*CELL+PAD*2;
+  function seed(id,ts,pl){ return fnv1a32(`${id}\0${ts}\0${pl}`); }
+  function drawFinder(g,r0,c0){ for(let r=0;r<7;r++) for(let c=0;c<7;c++){ const o=r===0||r===6||c===0||c===6,i=r>=2&&r<=4&&c>=2&&c<=4; g[r0+r][c0+c]=(o||i)?1:0; } }
+  function reserve(res,r0,c0,rn,cn){ for(let r=r0;r<r0+rn;r++) for(let c=c0;c<c0+cn;c++) res[r][c]=1; }
+  function buildGrid(rand) {
+    const g=Array.from({length:GRID},()=>new Uint8Array(GRID)), res=Array.from({length:GRID},()=>new Uint8Array(GRID));
+    drawFinder(g,0,0); drawFinder(g,0,GRID-7); drawFinder(g,GRID-7,0);
+    reserve(res,0,0,8,8); reserve(res,0,GRID-8,8,8); reserve(res,GRID-8,0,8,8);
+    for(let i=8;i<GRID-8;i++){ const v=i%2===0?1:0; g[6][i]=v; g[i][6]=v; res[6][i]=1; res[i][6]=1; }
+    for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++) if(!res[r][c]) g[r][c]=rand()<0.5?1:0;
+    return g;
+  }
+  function theme(seed){ const h=seed%360,s=55+((seed>>8)&0x1f),l=22+((seed>>14)&0x1f); return { dark:`hsl(${h},${s}%,${l}%)`,bg:`hsl(${h},${Math.round(s*.12)}%,97%)`,rim:`hsl(${h},${Math.round(s*.3)}%,${l+30}%)` }; }
+  window.generateFingerprint = function(id, ts, pl) {
+    const s=seed(id,ts,pl), rand=makePRNG(s), g=buildGrid(rand), t=theme(s), rects=[];
+    for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++) if(g[r][c]) rects.push(`<rect x="${PAD+c*CELL}" y="${PAD+r*CELL}" width="${CELL-1}" height="${CELL-1}" rx="1.5" fill="${t.dark}"/>`);
+    const svgH=TOTAL+14, label=`${id.slice(0,10)} · ${ts.slice(0,10)} · ${pl}`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${TOTAL}" height="${svgH}" viewBox="0 0 ${TOTAL} ${svgH}" role="img" aria-label="Fingerprint for ${id}">
+  <title>Agent Fingerprint · ${id}</title>
+  <rect width="${TOTAL}" height="${svgH}" rx="10" fill="${t.bg}"/>
+  <rect x="3" y="3" width="${TOTAL-6}" height="${svgH-6}" rx="8" fill="none" stroke="${t.rim}" stroke-width="1.5"/>
+  ${rects.join('')}
+  <text x="${TOTAL/2}" y="${svgH-4}" text-anchor="middle" font-family="monospace" font-size="7.5" fill="${t.dark}" opacity="0.55">${label}</text>
+</svg>`;
+  };
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Layer 2: Face
+// ══════════════════════════════════════════════════════════════════════════════
+
+(function() {
+  const W=220,H=220,CX=110,CY=110;
+  function seed(id,role,pers,pl){ return fnv1a32(`${id}\0${role}\0${[...pers].sort().join(',')}\0${pl}`); }
+  function poly(cx,cy,r,n,rot){ return Array.from({length:n},(_,i)=>{ const a=2*Math.PI*i/n+rot*Math.PI/180; return `${(cx+r*Math.cos(a)).toFixed(2)},${(cy+r*Math.sin(a)).toFixed(2)}`; }).join(' '); }
+  function pickShape(role){ const r=role.toLowerCase(); if(/cod|engineer|dev|build|tech/.test(r)) return {k:'h',n:6,rot:0}; if(/assist|help|support|chat/.test(r)) return {k:'c',n:0,rot:0}; if(/analyt|research|data/.test(r)) return {k:'d',n:4,rot:45}; if(/creat|design|art|writ/.test(r)) return {k:'o',n:8,rot:22.5}; return [{k:'h',n:6,rot:0},{k:'o',n:8,rot:22.5},{k:'p',n:5,rot:-90},{k:'d',n:4,rot:45},{k:'c',n:0,rot:0}][fnv1a32(role)%5]; }
+  function shapeEl(sh,cx,cy,r,fill,stroke){ if(sh.k==='c') return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`; return `<polygon points="${poly(cx,cy,r,sh.n,sh.rot)}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`; }
+  function innerEl(sh,cx,cy,r,d){ if(sh.k==='c') return `<circle cx="${cx}" cy="${cy}" r="${r-9}" fill="none" stroke="${d}" stroke-width="0.6" opacity="0.18"/>`; return `<polygon points="${poly(cx,cy,r-9,sh.n,sh.rot)}" fill="none" stroke="${d}" stroke-width="0.6" opacity="0.18"/>`; }
+  const PHU={openai:158,anthropic:28,google:213,mistral:270,meta:220,cohere:45,groq:180};
+  function pal(pl,s){ const h=PHU[pl.toLowerCase()]??(s%360); return {h,s:55+((s>>8)&0x1f),l:26+((s>>14)&0x18)}; }
+  function eyeStyle(traits){ const t=traits.join(' ').toLowerCase(); if(/logical|precise|struct/.test(t)) return 'sq'; if(/curious|explor|learn/.test(t)) return 'di'; if(/open|friend|warm/.test(t)) return 'ci'; if(/assert|direct|focus/.test(t)) return 'tr'; if(/calm|steady|patient/.test(t)) return 'sl'; return 'ci'; }
+  function eyeEl(x,y,sz,style,c){ const h=sz/2,f=v=>v.toFixed(1); switch(style){ case 'sq': return `<rect x="${f(x-h)}" y="${f(y-h)}" width="${f(sz)}" height="${f(sz)}" rx="1" fill="${c}"/>`; case 'di': return `<polygon points="${f(x)},${f(y-sz*.9)} ${f(x+sz*.65)},${f(y)} ${f(x)},${f(y+sz*.9)} ${f(x-sz*.65)},${f(y)}" fill="${c}"/>`; case 'tr': return `<polygon points="${f(x)},${f(y-sz*.9)} ${f(x+sz*.8)},${f(y+sz*.65)} ${f(x-sz*.8)},${f(y+sz*.65)}" fill="${c}"/>`; case 'sl': return `<rect x="${f(x-sz*.9)}" y="${f(y-sz*.22)}" width="${f(sz*1.8)}" height="${f(sz*.44)}" rx="${f(sz*.22)}" fill="${c}"/>`; default: return `<circle cx="${f(x)}" cy="${f(y)}" r="${f(h)}" fill="${c}"/>`; } }
+  function eyeHL(x,y,sz){ return `<circle cx="${(x-sz*.22).toFixed(1)}" cy="${(y-sz*.22).toFixed(1)}" r="${(sz*.18).toFixed(1)}" fill="white" opacity="0.65"/>`; }
+  function sigEl(cx,y,traits,c){ const t=traits.join(' ').toLowerCase(),x1=cx-36,x2=cx+36,sw=2; if(/energet|active|enthu/.test(t)) return `<path d="M${x1},${y} C${x1+10},${y-9} ${cx-10},${y+9} ${cx},${y} C${cx+10},${y-9} ${x2-10},${y+9} ${x2},${y}" fill="none" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/>`; if(/help|assist|warm|friend/.test(t)) return `<path d="M${x1},${y+5} Q${cx},${y-10} ${x2},${y+5}" fill="none" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/>`; if(/focus|serious|analyt/.test(t)) return `<line x1="${x1}" y1="${y-3}" x2="${x2}" y2="${y-3}" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/><line x1="${x1+6}" y1="${y+4}" x2="${x2-6}" y2="${y+4}" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/>`; if(/creat|play|art|fun/.test(t)) return `<polyline points="${x1},${y} ${x1+18},${y-8} ${cx},${y} ${cx+18},${y-8} ${x2},${y}" fill="none" stroke="${c}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`; return `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${c}" stroke-width="${sw}" stroke-linecap="round"/>`; }
+  function accents(traits,cx,cy,r,c,rand){ if(traits.length<2) return ''; return Array.from({length:Math.min(traits.length,7)},(_,i)=>{ const a=2*Math.PI*i/Math.min(traits.length,7)+rand()*.25,d=r+10+rand()*10; return `<circle cx="${(cx+d*Math.cos(a)).toFixed(1)}" cy="${(cy+d*Math.sin(a)).toFixed(1)}" r="${(1.5+rand()*2.5).toFixed(1)}" fill="${c}" opacity="0.32"/>`; }).join(''); }
+  window.generateFace = function(id, role, personality, platform) {
+    const traits=Array.isArray(personality)?personality:[], s=seed(id,role,traits,platform), rand=makePRNG(s);
+    const sh=pickShape(role), p=pal(platform,s), R=74;
+    const dark=`hsl(${p.h},${p.s}%,${p.l}%)`, light=`hsl(${p.h},${Math.round(p.s*.1)}%,97%)`, mid=`hsl(${p.h},${Math.round(p.s*.28)}%,${p.l+32}%)`, eyeC=`hsl(${p.h},${p.s}%,${Math.max(p.l-4,10)}%)`;
+    const es=eyeStyle(traits), eSz=9+rand()*7, eSp=22+rand()*14, eY=CY-10+(rand()-.5)*8, sY=CY+26+rand()*8;
+    const svgH=H+14;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${svgH}" viewBox="0 0 ${W} ${svgH}" role="img" aria-label="Face for ${id}">
+  <title>Agent Face · ${id}</title>
+  <rect width="${W}" height="${svgH}" rx="10" fill="hsl(${p.h},${Math.round(p.s*.08)}%,97%)"/>
+  <rect x="3" y="3" width="${W-6}" height="${svgH-6}" rx="8" fill="none" stroke="${mid}" stroke-width="1.5"/>
+  ${accents(traits,CX,CY,R,dark,rand)}
+  ${shapeEl(sh,CX,CY,R,light,mid)}
+  ${innerEl(sh,CX,CY,R,dark)}
+  ${eyeEl(CX-eSp,eY,eSz,es,eyeC)} ${eyeEl(CX+eSp,eY,eSz,es,eyeC)}
+  ${eyeHL(CX-eSp,eY,eSz)} ${eyeHL(CX+eSp,eY,eSz)}
+  ${sigEl(CX,sY,traits,dark)}
+  <text x="${W/2}" y="${svgH-4}" text-anchor="middle" font-family="monospace" font-size="7.5" fill="${dark}" opacity="0.55">${role.slice(0,16)} · ${platform.slice(0,10)}</text>
+</svg>`;
+  };
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Layer 3: Palm Line
+// ══════════════════════════════════════════════════════════════════════════════
+
+(function() {
+  const PALM_PATH='M 42,98 C 36,62 58,44 100,40 C 142,44 164,62 158,98 L 164,198 Q 160,252 100,254 Q 40,252 36,198 Z';
+  const B={xMin:52,xMax:148,yMin:68,yMax:238}, W=200, H=280;
+  function seed(id,s){ return fnv1a32(`${id}\0${JSON.stringify(s||{})}`); }
+  function params(s){ const tc=Math.max(0,s.taskCount||0),sr=Math.min(1,Math.max(0,s.successRate??0.75)); return {lineCount:Math.min(18,2+Math.floor(tc/25)),thickness:0.6+Math.min(tc/180,1.8),opacity:0.22+Math.min(tc/280,0.62),curvature:0.3+Math.min(tc/400,0.65),continuity:sr}; }
+  function lerp(a,b,t){return a+(b-a)*t;} function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
+  function makeLine(rand,p,idx,tot){ const {xMin,xMax,yMin,yMax}=B,spanX=xMax-xMin,spanY=yMax-yMin,zone=idx/Math.max(tot-1,1); let x1,y1,x2,y2; if(zone<0.33){x1=xMin+rand()*spanX*.25;y1=yMin+zone*spanY*.5+rand()*18;x2=xMax-rand()*spanX*.18;y2=y1+24+rand()*58;}else if(zone<0.66){x1=xMin+rand()*spanX*.35;y1=yMin+spanY*.22+rand()*spanY*.3;x2=xMin+spanX*.48+rand()*spanX*.38;y2=y1+32+rand()*76;}else{x1=xMin+rand()*spanX*.4;y1=yMin+spanY*.52+rand()*spanY*.3;x2=x1+spanX*.28+rand()*spanX*.22;y2=y1+rand()*46-12;} x1=clamp(x1,xMin,xMax);y1=clamp(y1,yMin,yMax);x2=clamp(x2,xMin,xMax);y2=clamp(y2,yMin,yMax); const cp1x=lerp(x1,x2,.33)+(rand()-.5)*p.curvature*58,cp1y=lerp(y1,y2,.33)+(rand()-.5)*p.curvature*38,cp2x=lerp(x1,x2,.66)+(rand()-.5)*p.curvature*58,cp2y=lerp(y1,y2,.66)+(rand()-.5)*p.curvature*38,f=v=>v.toFixed(1); return `M ${f(x1)},${f(y1)} C ${f(cp1x)},${f(cp1y)} ${f(cp2x)},${f(cp2y)} ${f(x2)},${f(y2)}`; }
+  function lineColor(s){ const h=(s%55)+12,sat=22+((s>>8)&0x1f),l=20+((s>>14)&0x18); return `hsl(${h},${sat}%,${l}%)`; }
+  window.generatePalmLine = function(id, activity) {
+    const s=seed(id,activity), rand=makePRNG(s), p=params(activity||{}), color=lineColor(s);
+    const bgH=(s%55)+12, bg=`hsl(${bgH},6%,97%)`, palmFill=`hsl(${bgH},14%,93%)`, palmRim=`hsl(${bgH},18%,82%)`;
+    const clipId=`pc${(s>>>0).toString(16)}`;
+    const lines=[];
+    for(let i=0;i<p.lineCount;i++){
+      const d=makeLine(rand,p,i,p.lineCount), op=(p.opacity*(0.65+0.35*(i%3===0?p.continuity:1))).toFixed(2), sw=(p.thickness*(0.65+0.6*rand())).toFixed(2);
+      const dash=p.continuity<0.5&&rand()<0.4?` stroke-dasharray="${(4+rand()*4).toFixed(1)},${(3+rand()*3).toFixed(1)}"`:'';
+      lines.push(`<path d="${d}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" opacity="${op}"${dash}/>`);
+    }
+    const tc=(activity||{}).taskCount??0, sr=(activity||{}).successRate!=null?Math.round((activity||{}).successRate*100):'?', svgH=H+14;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${svgH}" viewBox="0 0 ${W} ${svgH}" role="img" aria-label="Palm line for ${id}">
+  <title>Agent Palm Line · ${id}</title>
+  <defs><clipPath id="${clipId}"><path d="${PALM_PATH}"/></clipPath></defs>
+  <rect width="${W}" height="${svgH}" rx="10" fill="${bg}"/>
+  <rect x="3" y="3" width="${W-6}" height="${svgH-6}" rx="8" fill="none" stroke="hsl(${bgH},14%,85%)" stroke-width="1.5"/>
+  <path d="${PALM_PATH}" fill="${palmFill}" stroke="${palmRim}" stroke-width="1.5"/>
+  <g clip-path="url(#${clipId})">${lines.join('')}</g>
+  <text x="${W/2}" y="${svgH-4}" text-anchor="middle" font-family="monospace" font-size="7.5" fill="${color}" opacity="0.55">${id.slice(0,12)} · ${tc} tasks · ${sr}% success</text>
+</svg>`;
+  };
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Sample agent roster
+// ══════════════════════════════════════════════════════════════════════════════
+
+const AGENTS = [
+  {
+    agentId:     'codex-coder-v1',
+    name:        'CodexCoder',
+    role:        'CodeEngineer',
+    personality: ['logical', 'precise', 'focused'],
+    platform:    'anthropic',
+    createdAt:   '2024-01-10T09:00:00Z',
+    age:         'new',
+    activity:    { taskCount: 8,   taskTypes: ['code'],                              totalDuration: 120,   successRate: 0.88 },
+  },
+  {
+    agentId:     'data-sentinel-v2',
+    name:        'DataSentinel',
+    role:        'DataAnalyst',
+    personality: ['analytical', 'curious', 'systematic'],
+    platform:    'openai',
+    createdAt:   '2023-08-15T14:30:00Z',
+    age:         'mid',
+    activity:    { taskCount: 187, taskTypes: ['analysis', 'research', 'report'],    totalDuration: 4820,  successRate: 0.79 },
+  },
+  {
+    agentId:     'creative-weaver-v3',
+    name:        'CreativeWeaver',
+    role:        'CreativeWriter',
+    personality: ['creative', 'expressive', 'warm', 'playful'],
+    platform:    'google',
+    createdAt:   '2023-03-01T08:00:00Z',
+    age:         'veteran',
+    activity:    { taskCount: 634, taskTypes: ['write', 'edit', 'design', 'ideate'], totalDuration: 18200, successRate: 0.91 },
+  },
+];
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Render
+// ══════════════════════════════════════════════════════════════════════════════
+
+const container = document.getElementById('output');
+
+for (const a of AGENTS) {
+  const fpSvg   = generateFingerprint(a.agentId, a.createdAt, a.platform);
+  const faceSvg = generateFace(a.agentId, a.role, a.personality, a.platform);
+  const palmSvg = generatePalmLine(a.agentId, a.activity);
+
+  const ageLabel = { new: 'New Agent', mid: 'Mid-Career', veteran: 'Veteran' }[a.age];
+
+  const section = document.createElement('div');
+  section.className = 'agent-section';
+  section.innerHTML = `
+    <div class="agent-header">
+      <div>
+        <div class="agent-name">${a.name}</div>
+        <div class="agent-sub">${a.role} · ${a.platform} · ${a.agentId}</div>
+      </div>
+      <span class="agent-age age-${a.age}">${ageLabel}</span>
+    </div>
+    <div class="layers">
+      <div class="layer">
+        <span class="layer-label">Layer 1 — Fingerprint</span>
+        <div style="filter:drop-shadow(0 4px 14px rgba(0,0,0,.6))">${fpSvg}</div>
+      </div>
+      <div class="layer">
+        <span class="layer-label">Layer 2 — Face</span>
+        <div style="filter:drop-shadow(0 4px 14px rgba(0,0,0,.6))">${faceSvg}</div>
+      </div>
+      <div class="layer">
+        <span class="layer-label">Layer 3 — Palm Line</span>
+        <div style="filter:drop-shadow(0 4px 14px rgba(0,0,0,.6))">${palmSvg}</div>
+      </div>
+    </div>`;
+  container.appendChild(section);
+}
+</script>
+</body>
+</html>

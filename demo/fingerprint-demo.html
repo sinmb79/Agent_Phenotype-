@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Agent Fingerprint Demo — 22B Labs</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #0d0d12;
+      color: #e0e0e8;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 24px 64px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 52px;
+    }
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: #f0f0f8;
+    }
+    header p {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #7a7a92;
+      max-width: 480px;
+    }
+    .badge {
+      display: inline-block;
+      margin-top: 12px;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #555577;
+      border: 1px solid #333344;
+      border-radius: 100px;
+      padding: 3px 10px;
+    }
+
+    .grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 36px;
+      justify-content: center;
+      max-width: 900px;
+    }
+
+    .card {
+      background: #13131e;
+      border: 1px solid #22223a;
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      transition: transform 0.18s ease, border-color 0.18s ease;
+      cursor: default;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: #3a3a60;
+    }
+
+    .fingerprint-wrap {
+      filter: drop-shadow(0 6px 18px rgba(0,0,0,0.5));
+    }
+    .fingerprint-wrap svg {
+      display: block;
+    }
+
+    .meta {
+      width: 100%;
+    }
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 0.78rem;
+      line-height: 1.8;
+      border-bottom: 1px solid #1d1d2e;
+      padding: 2px 0;
+    }
+    .meta-row:last-child { border-bottom: none; }
+    .meta-key {
+      color: #55557a;
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .meta-val {
+      color: #c0c0d8;
+      font-family: 'Menlo', 'Consolas', monospace;
+      font-size: 0.75rem;
+    }
+    .seed-val {
+      color: #6060a0;
+    }
+
+    footer {
+      margin-top: 64px;
+      font-size: 0.75rem;
+      color: #33334a;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Agent Visual Identity System</h1>
+  <p>Deterministic SVG fingerprints — same agent always resolves to the same visual identity.</p>
+  <span class="badge">Phase 1 · Fingerprint Generator · 22B Labs</span>
+</header>
+
+<div class="grid" id="output"></div>
+
+<footer>
+  Generated in-browser · No network requests · Pure JS
+</footer>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+//  Fingerprint generator (inlined from src/generators/fingerprint.js)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GRID  = 21;
+const CELL  = 10;
+const PAD   = 14;
+const TOTAL = GRID * CELL + PAD * 2;
+
+function fnv1a32(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+    h >>>= 0;
+  }
+  return h;
+}
+
+function computeSeed(agentId, createdAt, platform) {
+  return fnv1a32(`${agentId}\0${createdAt}\0${platform}`);
+}
+
+function makePRNG(seed) {
+  let s = (seed >>> 0) || 0xcafebabe;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    return s / 0x100000000;
+  };
+}
+
+function drawFinder(grid, r0, c0) {
+  for (let r = 0; r < 7; r++) {
+    for (let c = 0; c < 7; c++) {
+      const outer = r === 0 || r === 6 || c === 0 || c === 6;
+      const inner = r >= 2 && r <= 4 && c >= 2 && c <= 4;
+      grid[r0 + r][c0 + c] = (outer || inner) ? 1 : 0;
+    }
+  }
+}
+
+function reserve(res, r0, c0, rows, cols) {
+  for (let r = r0; r < r0 + rows; r++)
+    for (let c = c0; c < c0 + cols; c++)
+      res[r][c] = 1;
+}
+
+function buildGrid(rand) {
+  const grid = Array.from({ length: GRID }, () => new Uint8Array(GRID));
+  const res  = Array.from({ length: GRID }, () => new Uint8Array(GRID));
+
+  drawFinder(grid, 0, 0);
+  drawFinder(grid, 0, GRID - 7);
+  drawFinder(grid, GRID - 7, 0);
+  reserve(res, 0, 0,        8, 8);
+  reserve(res, 0, GRID - 8, 8, 8);
+  reserve(res, GRID - 8, 0, 8, 8);
+
+  for (let i = 8; i < GRID - 8; i++) {
+    const v = (i % 2 === 0) ? 1 : 0;
+    grid[6][i] = v;  grid[i][6] = v;
+    res[6][i]  = 1;  res[i][6]  = 1;
+  }
+
+  for (let r = 0; r < GRID; r++)
+    for (let c = 0; c < GRID; c++)
+      if (!res[r][c]) grid[r][c] = rand() < 0.5 ? 1 : 0;
+
+  return grid;
+}
+
+function deriveTheme(seed) {
+  const hue = seed % 360;
+  const sat = 55 + ((seed >>  8) & 0x1f);
+  const lum = 22 + ((seed >> 14) & 0x1f);
+  return {
+    dark : `hsl(${hue},${sat}%,${lum}%)`,
+    bg   : `hsl(${hue},${Math.round(sat * 0.12)}%,97%)`,
+    rim  : `hsl(${hue},${Math.round(sat * 0.3)}%,${lum + 30}%)`,
+  };
+}
+
+function generateFingerprint(agentId, createdAt, platform) {
+  const seed  = computeSeed(agentId, createdAt, platform);
+  const rand  = makePRNG(seed);
+  const grid  = buildGrid(rand);
+  const theme = deriveTheme(seed);
+
+  const rects = [];
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (grid[r][c]) {
+        const x = PAD + c * CELL;
+        const y = PAD + r * CELL;
+        rects.push(`<rect x="${x}" y="${y}" width="${CELL-1}" height="${CELL-1}" rx="1.5" fill="${theme.dark}"/>`);
+      }
+    }
+  }
+
+  const svgH  = TOTAL + 14;
+  const label = `${agentId.slice(0, 12)} · ${createdAt.slice(0, 10)} · ${platform}`;
+
+  return {
+    svg: [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${TOTAL}" height="${svgH}"`,
+      `     viewBox="0 0 ${TOTAL} ${svgH}" role="img" aria-label="Fingerprint for ${agentId}">`,
+      `  <title>Agent Fingerprint · ${agentId}</title>`,
+      `  <rect width="${TOTAL}" height="${svgH}" rx="10" fill="${theme.bg}"/>`,
+      `  <rect x="3" y="3" width="${TOTAL-6}" height="${svgH-6}" rx="8" fill="none" stroke="${theme.rim}" stroke-width="1.5"/>`,
+      ...rects,
+      `  <text x="${TOTAL/2}" y="${svgH-4}" text-anchor="middle" font-family="monospace"`,
+      `        font-size="7.5" fill="${theme.dark}" opacity="0.55">${label}</text>`,
+      `</svg>`,
+    ].join('\n'),
+    seed,
+    theme,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Sample agents
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AGENTS = [
+  {
+    agentId:   'agent-alpha-001',
+    createdAt: '2024-01-15T08:30:00Z',
+    platform:  'openai',
+    name:      'Alpha',
+  },
+  {
+    agentId:   'agent-beta-002',
+    createdAt: '2024-03-22T14:45:00Z',
+    platform:  'anthropic',
+    name:      'Beta',
+  },
+  {
+    agentId:   'agent-gamma-003',
+    createdAt: '2024-06-10T22:00:00Z',
+    platform:  'google',
+    name:      'Gamma',
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Render
+// ─────────────────────────────────────────────────────────────────────────────
+
+const container = document.getElementById('output');
+
+for (const agent of AGENTS) {
+  const { svg, seed } = generateFingerprint(agent.agentId, agent.createdAt, agent.platform);
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="fingerprint-wrap">${svg}</div>
+    <div class="meta">
+      <div class="meta-row">
+        <span class="meta-key">agent</span>
+        <span class="meta-val">${agent.name} / ${agent.agentId}</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-key">platform</span>
+        <span class="meta-val">${agent.platform}</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-key">created</span>
+        <span class="meta-val">${agent.createdAt}</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-key">seed</span>
+        <span class="meta-val seed-val">0x${seed.toString(16).toUpperCase().padStart(8, '0')}</span>
+      </div>
+    </div>
+  `;
+  container.appendChild(card);
+}
+</script>
+</body>
+</html>
