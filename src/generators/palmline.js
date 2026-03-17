@@ -1,26 +1,33 @@
 'use strict';
 
 /**
- * Palm Line Generator — Phase 3
- * Deterministically generates an SVG palm that grows with agent activity history.
+ * Palm Line Generator — v2  (robot hand / PCB circuit aesthetic)
  *
- * New agent  → sparse, faint lines   (near-blank palm)
- * Veteran    → dense, thick lines    (complex, readable history)
+ * Renders a mechanical robot hand with circuit traces inside the palm.
+ * Activity history drives trace density and complexity:
+ *   New agent    → sparse traces, faint glow
+ *   Veteran      → dense branching circuit network, bright traces
  *
- * Usage:
- *   const { generatePalmLine } = require('./palmline');
- *   const svg = generatePalmLine('agent-001', {
- *     taskCount: 150, taskTypes: ['code','review'], totalDuration: 4800, successRate: 0.87
- *   });
- *
- * activitySummary schema:
- *   taskCount     {number}   Total completed tasks
- *   taskTypes     {string[]} Distinct task type names
- *   totalDuration {number}   Total active time in minutes
- *   successRate   {number}   0..1  (defaults to 0.75 if omitted)
+ * Canvas: 200 × 294 px
  */
 
-const W = 200, H = 280;
+const W  = 200;
+const SH = 294;   // SVG total height (incl. label row)
+
+// Palm panel geometry
+const PX = 36, PY = 90, PW = 128, PH = 152, PR = 8;   // x, y, w, h, corner-radius
+
+// 4 finger rectangles [x, y, w, h, rx]
+const FINGERS = [
+  [40,  35, 24, 56, 4],   // index
+  [68,  21, 24, 70, 4],   // middle (tallest)
+  [96,  24, 24, 67, 4],   // ring
+  [124, 37, 24, 54, 4],   // pinky
+];
+
+// Trace bounding box (inside palm)
+const TX1 = PX + 10, TX2 = PX + PW - 10;
+const TY1 = PY + 12, TY2 = PY + PH - 12;
 
 // ── Hash & PRNG ───────────────────────────────────────────────────────────────
 
@@ -40,162 +47,175 @@ function computeSeed(agentId, activitySummary) {
 
 function makePRNG(seed) {
   let s = (seed >>> 0) || 0xcafebabe;
-  return () => {
-    s ^= s << 13; s ^= s >>> 17; s ^= s << 5;
-    s >>>= 0;
-    return s / 0x100000000;
+  return function () {
+    s ^= s << 13;
+    s ^= s >> 17;
+    s ^= s << 5;
+    return s >>> 0;
   };
 }
 
-// ── Palm shape ────────────────────────────────────────────────────────────────
-// Abstract palm silhouette — not anatomical, just clearly "a palm".
-// Canvas: 200 × 280 px.  Palm spans roughly x:[36, 164], y:[40, 254].
+// ── Color ─────────────────────────────────────────────────────────────────────
 
-const PALM_PATH = 'M 42,98 C 36,62 58,44 100,40 C 142,44 164,62 158,98 L 164,198 Q 160,252 100,254 Q 40,252 36,198 Z';
+// Circuit trace hues — pulled from PCB / HUD palette
+const CIRCUIT_HUES = [145, 170, 195, 212, 38, 28, 278, 320];
 
-// Conservative bounding box used for line endpoint generation.
-// Lines generated here will stay well inside the palm silhouette.
-const B = { xMin: 52, xMax: 148, yMin: 68, yMax: 238 };
+function traceHue(seed) {
+  const base  = CIRCUIT_HUES[seed % CIRCUIT_HUES.length];
+  const shift = ((seed >> 8) % 21) - 10;
+  return ((base + shift) % 360 + 360) % 360;
+}
 
-// ── Activity → visual parameters ──────────────────────────────────────────────
+// ── Activity → visual parameters ─────────────────────────────────────────────
 
 function activityToParams(s) {
   const tc = Math.max(0, s.taskCount    || 0);
   const sr = Math.min(1, Math.max(0, s.successRate ?? 0.75));
-  const types = Array.isArray(s.taskTypes) ? s.taskTypes : [];
-
   return {
     lineCount  : Math.min(18, 2 + Math.floor(tc / 25)),
-    thickness  : 0.6 + Math.min(tc / 180, 1.8),
-    opacity    : 0.22 + Math.min(tc / 280, 0.62),
-    curvature  : 0.3  + Math.min(tc / 400, 0.65),
+    opacity    : 0.35 + Math.min(tc / 320, 0.60),
+    thickness  : 0.9  + Math.min(tc / 220, 1.4),
+    dotSize    : 1.5  + Math.min(tc / 400, 1.5),
     continuity : sr,
-    typeCount  : types.length,
   };
 }
 
-// ── Line generation ───────────────────────────────────────────────────────────
-
-function lerp(a, b, t) { return a + (b - a) * t; }
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-function makeLine(rand, params, index, total) {
-  const { xMin, xMax, yMin, yMax } = B;
-  const spanX = xMax - xMin;
-  const spanY = yMax - yMin;
-  const zone  = index / Math.max(total - 1, 1); // 0..1
-
-  let x1, y1, x2, y2;
-
-  if (zone < 0.33) {
-    // Upper zone: left-to-right, slightly descending — "life lines"
-    x1 = xMin + rand() * spanX * 0.25;
-    y1 = yMin + zone * spanY * 0.5 + rand() * 18;
-    x2 = xMax - rand() * spanX * 0.18;
-    y2 = y1 + 24 + rand() * 58;
-  } else if (zone < 0.66) {
-    // Middle zone: diagonal — "work lines"
-    x1 = xMin + rand() * spanX * 0.35;
-    y1 = yMin + spanY * 0.22 + rand() * spanY * 0.3;
-    x2 = xMin + spanX * 0.48 + rand() * spanX * 0.38;
-    y2 = y1 + 32 + rand() * 76;
-  } else {
-    // Lower zone: shorter, more horizontal — "detail lines"
-    x1 = xMin + rand() * spanX * 0.4;
-    y1 = yMin + spanY * 0.52 + rand() * spanY * 0.3;
-    x2 = x1 + spanX * 0.28 + rand() * spanX * 0.22;
-    y2 = y1 + rand() * 46 - 12;
-  }
-
-  x1 = clamp(x1, xMin, xMax); y1 = clamp(y1, yMin, yMax);
-  x2 = clamp(x2, xMin, xMax); y2 = clamp(y2, yMin, yMax);
-
-  // Cubic bezier control points — curvature adds history-like complexity
-  const cp1x = lerp(x1, x2, 0.33) + (rand() - 0.5) * params.curvature * 58;
-  const cp1y = lerp(y1, y2, 0.33) + (rand() - 0.5) * params.curvature * 38;
-  const cp2x = lerp(x1, x2, 0.66) + (rand() - 0.5) * params.curvature * 58;
-  const cp2y = lerp(y1, y2, 0.66) + (rand() - 0.5) * params.curvature * 38;
-
-  const f = v => v.toFixed(1);
-  return `M ${f(x1)},${f(y1)} C ${f(cp1x)},${f(cp1y)} ${f(cp2x)},${f(cp2y)} ${f(x2)},${f(y2)}`;
-}
-
-// ── Colours ───────────────────────────────────────────────────────────────────
-
-function lineColor(seed) {
-  // Warm brown-red range — evokes aged skin / ink on paper
-  const h = (seed % 55) + 12;
-  const s = 22 + ((seed >>  8) & 0x1f);
-  const l = 20 + ((seed >> 14) & 0x18);
-  return `hsl(${h},${s}%,${l}%)`;
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Circuit trace builder ─────────────────────────────────────────────────────
 
 /**
- * Generate a deterministic SVG palm line for an AI agent.
- *
- * @param {string} agentId
- * @param {object} activitySummary
- *   @param {number}   activitySummary.taskCount     - Total tasks completed
- *   @param {string[]} activitySummary.taskTypes     - List of task type names
- *   @param {number}   activitySummary.totalDuration - Total active time in minutes
- *   @param {number}   activitySummary.successRate   - 0..1
- * @returns {string} SVG markup string
+ * Returns an L-shaped Manhattan path (PCB trace) within the palm bounds.
+ * Alternates H-then-V vs V-then-H routing per trace index.
  */
+function makeTrace(rng, index) {
+  const spanX = TX2 - TX1;
+  const spanY = TY2 - TY1;
+
+  const x1 = TX1 + (rng() % spanX);
+  const y1 = TY1 + (rng() % (spanY - 24));
+
+  // Length varies: short traces on dense networks, longer on sparse
+  const lenH = 18 + (rng() % 72);
+  const lenV = 12 + (rng() % 56);
+
+  const goRight = (rng() % 2) === 0;
+  const goDown  = (rng() % 2) === 0;
+
+  const x2 = Math.min(TX2, Math.max(TX1, goRight ? x1 + lenH : x1 - lenH));
+  const y2 = Math.min(TY2, Math.max(TY1, goDown  ? y1 + lenV : y1 - lenV));
+
+  const f = v => v.toFixed(1);
+
+  if (index % 2 === 0) {
+    // Horizontal first, then vertical
+    return { d: `M ${f(x1)},${f(y1)} H ${f(x2)} V ${f(y2)}`, jx: x2, jy: y1 };
+  } else {
+    // Vertical first, then horizontal
+    return { d: `M ${f(x1)},${f(y1)} V ${f(y2)} H ${f(x2)}`, jx: x1, jy: y2 };
+  }
+}
+
+// ── SVG assembly ──────────────────────────────────────────────────────────────
+
 function generatePalmLine(agentId, activitySummary) {
   if (!agentId) throw new Error('generatePalmLine requires agentId');
 
   const summary = activitySummary || {};
   const seed    = computeSeed(agentId, summary);
-  const rand    = makePRNG(seed);
+  const rng     = makePRNG(seed);
   const params  = activityToParams(summary);
-  const color   = lineColor(seed);
+  const h       = traceHue(seed);
 
-  const bgH     = (seed % 55) + 12;
-  const bg      = `hsl(${bgH},6%,97%)`;
-  const palmFill = `hsl(${bgH},14%,93%)`;
-  const palmRim  = `hsl(${bgH},18%,82%)`;
+  // Color palette
+  const traceColor  = `hsl(${h},72%,55%)`;
+  const traceGlow   = `hsl(${h},72%,68%)`;
+  const metalDark   = `hsl(${h},14%,12%)`;
+  const metalMid    = `hsl(${h},12%,16%)`;
+  const metalEdge   = `hsl(${h},18%,22%)`;
+  const gradId      = `pg${(seed & 0xffff).toString(16).padStart(4, '0')}`;
+  const clipId      = `pc${(seed & 0xffff).toString(16).padStart(4, '0')}`;
 
-  // Build clipPath ID unique per SVG (safe for multi-SVG pages)
-  const clipId = `pc${(seed >>> 0).toString(16)}`;
+  // Gradient for metallic palm
+  const defs = `<defs>
+    <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="hsl(${h},16%,18%)"/>
+      <stop offset="50%"  stop-color="${metalMid}"/>
+      <stop offset="100%" stop-color="hsl(${h},14%,9%)"/>
+    </linearGradient>
+    <clipPath id="${clipId}">
+      <rect x="${PX}" y="${PY}" width="${PW}" height="${PH}" rx="${PR}"/>
+    </clipPath>
+  </defs>`;
 
-  const lineEls = [];
+  // Background
+  const bg = `<rect width="${W}" height="${SH}" fill="#070710"/>`;
+
+  // Fingers
+  let fingerEls = '';
+  FINGERS.forEach(([fx, fy, fw, fh, frx]) => {
+    fingerEls += `<rect x="${fx}" y="${fy}" width="${fw}" height="${fh}" rx="${frx}" `
+               + `fill="url(#${gradId})" stroke="${metalEdge}" stroke-width="1"/>`;
+    // Joint lines on each finger (two horizontal seams)
+    const jy1 = (fy + fh * 0.38).toFixed(1);
+    const jy2 = (fy + fh * 0.68).toFixed(1);
+    fingerEls += `<line x1="${fx + 3}" y1="${jy1}" x2="${fx + fw - 3}" y2="${jy1}" `
+               + `stroke="${metalEdge}" stroke-width="0.7" opacity="0.7"/>`;
+    fingerEls += `<line x1="${fx + 3}" y1="${jy2}" x2="${fx + fw - 3}" y2="${jy2}" `
+               + `stroke="${metalEdge}" stroke-width="0.7" opacity="0.7"/>`;
+  });
+
+  // Palm body
+  const palm = `<rect x="${PX}" y="${PY}" width="${PW}" height="${PH}" rx="${PR}" `
+             + `fill="url(#${gradId})" stroke="${metalEdge}" stroke-width="1.2"/>`;
+
+  // Constant bus line — always present (horizontal bar near top of palm)
+  const busY  = (PY + 22).toFixed(1);
+  const busEl = `<path d="M ${TX1},${busY} H ${TX2}" `
+              + `fill="none" stroke="${traceColor}" stroke-width="1.2" opacity="0.45"/>`;
+
+  // Circuit traces (activity-driven)
+  const traceEls   = [];
+  const junctionEls = [];
+
   for (let i = 0; i < params.lineCount; i++) {
-    const d  = makeLine(rand, params, i, params.lineCount);
-    // Vary per-line opacity slightly for an organic feel
-    const op = (params.opacity * (0.65 + 0.35 * (i % 3 === 0 ? params.continuity : 1))).toFixed(2);
-    const sw = (params.thickness * (0.65 + 0.6 * rand())).toFixed(2);
-    // Dashed lines for low-success stretches
-    const dash = params.continuity < 0.5 && rand() < 0.4
-      ? ` stroke-dasharray="${(4 + rand() * 4).toFixed(1)},${(3 + rand() * 3).toFixed(1)}"`
+    const { d, jx, jy } = makeTrace(rng, i);
+    const op  = (params.opacity * (0.6 + 0.4 * ((rng() % 100) / 100))).toFixed(2);
+    const sw  = (params.thickness * (0.7 + 0.5 * ((rng() % 100) / 100))).toFixed(2);
+    const dash = params.continuity < 0.5 && (rng() % 3 === 0)
+      ? ` stroke-dasharray="${3 + rng() % 5} ${2 + rng() % 3}"`
       : '';
-    lineEls.push(
-      `<path d="${d}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" opacity="${op}"${dash}/>`
+
+    traceEls.push(
+      `<path d="${d}" fill="none" stroke="${traceGlow}" stroke-width="${sw}"`
+      + ` stroke-linecap="square" opacity="${op}"${dash}/>`
+    );
+
+    // Junction dot at the corner of each L-trace
+    junctionEls.push(
+      `<circle cx="${jx.toFixed(1)}" cy="${jy.toFixed(1)}" r="${params.dotSize.toFixed(1)}" `
+      + `fill="${traceGlow}" opacity="${op}"/>`
     );
   }
 
-  const tc  = summary.taskCount ?? 0;
-  const sr  = summary.successRate != null ? Math.round(summary.successRate * 100) : '?';
-  const svgH = H + 14;
+  const tc = summary.taskCount ?? 0;
+  const sr = summary.successRate != null ? Math.round(summary.successRate * 100) : '?';
+  const label = `<text x="${W / 2}" y="${SH - 6}" text-anchor="middle" font-family="monospace" `
+              + `font-size="7.5" fill="${traceColor}" opacity="0.5">`
+              + `${agentId.slice(0, 12)} · ${tc} tasks · ${sr}% success</text>`;
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${svgH}"`,
-    `     viewBox="0 0 ${W} ${svgH}" role="img" aria-label="Palm line for ${agentId}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${SH}"`,
+    `     viewBox="0 0 ${W} ${SH}" role="img" aria-label="Palm line for ${agentId}">`,
     `  <title>Agent Palm Line · ${agentId}</title>`,
-    `  <defs>`,
-    `    <clipPath id="${clipId}">`,
-    `      <path d="${PALM_PATH}"/>`,
-    `    </clipPath>`,
-    `  </defs>`,
-    `  <rect width="${W}" height="${svgH}" rx="10" fill="${bg}"/>`,
-    `  <rect x="3" y="3" width="${W - 6}" height="${svgH - 6}" rx="8" fill="none" stroke="hsl(${bgH},14%,85%)" stroke-width="1.5"/>`,
-    `  <path d="${PALM_PATH}" fill="${palmFill}" stroke="${palmRim}" stroke-width="1.5"/>`,
+    `  ${defs}`,
+    `  ${bg}`,
+    `  ${fingerEls}`,
+    `  ${palm}`,
     `  <g clip-path="url(#${clipId})">`,
-    ...lineEls.map(l => `    ${l}`),
+    `    ${busEl}`,
+    ...traceEls.map(l => `    ${l}`),
+    ...junctionEls.map(c => `    ${c}`),
     `  </g>`,
-    `  <text x="${W / 2}" y="${svgH - 4}" text-anchor="middle" font-family="monospace"`,
-    `        font-size="7.5" fill="${color}" opacity="0.55">${agentId.slice(0, 12)} · ${tc} tasks · ${sr}% success</text>`,
+    `  ${label}`,
     `</svg>`,
   ].join('\n');
 }
